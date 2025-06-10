@@ -1,0 +1,35 @@
+---
+steps:
+  - name: docker
+    args:
+      - buildx
+      - create
+      - '--driver'
+      - docker-container
+      - '--name'
+      - container
+      - '--use'
+  - name: docker
+    args:
+      - buildx
+      - build
+      - '--platform'
+      - 'linux/amd64,linux/arm64'
+      - '-t'
+      - '${_GCR_IMAGE}:${_TAG}'
+      - '-t'
+      - "${_GCR_IMAGE}:$SHORT_SHA"
+      - '--push'
+      - .
+
+options:
+  dynamic_substitutions: true
+
+substitutions:
+  _APP_NAME: cns-orchestrator
+  _ARTIFACT_REGISTRY_REPO: cnscp
+  _ENV: staging
+  _GCR_IMAGE: >-
+    us-central1-docker.pkg.dev/${_GCR_PROJ}/${_ARTIFACT_REGISTRY_REPO}/${_APP_NAME}
+  _GCR_PROJ: padi-staging
+  _TAG: latest
