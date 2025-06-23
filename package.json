@@ -1,6 +1,6 @@
 {
   "name": "cns-orchestrator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CNS Orchestrator",
   "author": "Padi, Inc",
   "license": "ISC",
@@ -15,6 +15,7 @@
   "dependencies": {
     "colors": "^1.4.0",
     "dotenv": "^16.4.5",
-    "etcd3": "^1.1.2"
+    "etcd3": "^1.1.2",
+    "short-uuid": "^5.2.0"
   }
 }
