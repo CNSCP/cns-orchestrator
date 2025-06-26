@@ -15,3 +15,14 @@ npm run start
 - `CNS_USERNAME`
 - `CNS_PASSWORD`
 
+## Kubernetes
+
+```
+kubectl create secret generic \
+  -n <NAMESPACE> \
+  --from-literal CNS_PASSWORD=<PASSWORD> \
+  cns-password
+
+kubectl apply -f kubernetes/deployment.yaml
+```
+

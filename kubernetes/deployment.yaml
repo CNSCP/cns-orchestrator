@@ -1,0 +1,31 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cns-orchestrator
+  namespace: cns-dev
+  labels:
+    app: cns-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cns-orchestrator
+  template:
+    metadata:
+      labels:
+        app: cns-orchestrator
+    spec:
+      containers:
+      - name: cns-orchestrator
+        image: us-central1-docker.pkg.dev/padi-staging/cnscp/cns-orchestrator:latest
+        env:
+        - name: CNS_HOST
+          value: "http://etcd.test.cns.dev"
+        - name: CNS_PORT
+          value: "2379"
+        - name: CNS_USERNAME
+          value: "padi_admin"
+        envFrom:
+        - secretRef:
+            name: cns-password
