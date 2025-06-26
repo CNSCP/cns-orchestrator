@@ -29,7 +29,7 @@ steps:
       'image',
       'deployment',
       '${_APP_NAME}',
-      "${_APP_NAME}=${_GCR_IMAGE}:${_KUBE_DEPLOY_TAG}"
+      "${_APP_NAME}=${_GCR_IMAGE}:${_KUBE_DEPLOY_TAG}",
       '-n',
       "${_KUBE_NS}"
     ]
