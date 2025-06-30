@@ -247,9 +247,10 @@ async function onput(change) {
 //    debug('PUT ' + key + ' = ' + value);
 
     // Creating or modifying key?
-    if (change.version === '1')
-      await created(key, value);
-    else await modified(key, value);
+//    if (change.version === '1')
+//      await created(key, value);
+//    else
+    await modified(key, value);
   } catch(e) {
     // Failure
     error(e);
@@ -263,7 +264,8 @@ async function ondelete(change) {
     const key = change.key.toString();
     const value = change.value.toString();
 
-//    debug('DEL ' + key);
+//console.log(change);
+//    debug('DEL ' + key, value);
 
     // Deleting key
     await deleted(key, value);
@@ -286,6 +288,7 @@ function isValidMode() {
 
 // cns/network/nodes/{node}/contexts/{context}/{role}/{profile}/connections/{connection}/properties
 
+/*
 // Key is created
 async function created(key, value) {
   const parts = key.split('/');
@@ -311,6 +314,19 @@ async function created(key, value) {
               // Version created
               rebuild();
               break;
+            case 'connections':
+              // Connections
+              switch (connection) {
+                case 'properties':
+                  // Connection properties
+                  await update(key, value);
+                  break;
+              }
+              break;
+            case 'properties':
+              // Capability properties
+              await propagate(key, value);
+              break;
           }
           break;
       }
@@ -320,7 +336,7 @@ async function created(key, value) {
       rebuild();
       break;
   }
-}
+}*/
 
 // Key has changed
 async function modified(key, value) {
@@ -336,7 +352,7 @@ async function modified(key, value) {
       // Orchestrator changed
       mode = value;
 // remove all connections
-//      rebuild();
+      rebuild();
       break;
     case 'nodes':
       // Node changed
@@ -369,6 +385,7 @@ async function modified(key, value) {
       break;
     case 'profiles':
       // Profile changed
+      rebuild();
       break;
   }
 }
@@ -379,7 +396,10 @@ async function deleted(key, value) {
 
   const network = parts[2];
   const role = parts[6];
+  const profile = parts[7];
   const capability = parts[8];
+  const connection = parts[9];
+  const other = parts[10];
 
 // profile delete
 // capability delete
@@ -388,7 +408,7 @@ async function deleted(key, value) {
     case 'orchestrator':
       // Orchestrator deleted
       mode = 'none';
-// remove all connections
+// remove all connections?
       break;
     case 'nodes':
       switch (role) {
@@ -398,12 +418,22 @@ async function deleted(key, value) {
           switch (capability) {
             case 'version':
             case 'scope':
-    // remove connections
-              rebuild();
+    // remove connections?
+//              rebuild();
               break;
             case 'connections':
+              // Other role
+              switch (other) {
+                case 'provider':
+                case 'consumer':
+                  // Role deleted
+                    // previous value is not available!
+//                  const key2 = value + '/' + role + '/' + profile + '/connections/' + connection;
+//                  console.log('WANTS TO PURGE', key2);
+                  break;
+              }
               // Connection deleted
-              rebuild();
+//              rebuild();
               break;
     // delete property? put it back
           }
