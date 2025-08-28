@@ -22,7 +22,6 @@ const E_MISSING = 'Missing argument';
 const E_CONFIG = 'Not configured';
 const E_CONNECT = 'Not connected';
 const E_WATCH = 'Failed to watch';
-const E_BUILD = 'Failed to build';
 const E_ALL = 'Failed to get all';
 const E_GET = 'Failed to get';
 const E_PUT = 'Failed to put';
@@ -55,7 +54,8 @@ const options = {
 // Local data
 
 var client;
-var mode;
+
+var cache;
 var watcher;
 
 var timer;
@@ -206,152 +206,83 @@ async function connect() {
   debug('Connecting...');
   client = new etcd.Etcd3(options);
 
-  // Get orchestrator mode
-  mode = await get('cns/network/orchestrator');
+  // Get cache
+  debug('Caching...');
+  cache = await all('cns');
 
   // Create watcher
   debug('Watching...');
-  watcher = (await watch('cns/network'))
-    .on('connected', () => {
-      // Re-connect
-      debug('Connected...');
-    })
-    .on('put', async (change) => {
-      // Key put
-      await onput(change);
-    })
-    .on('delete', async (change) => {
-      // Key deleted
-      await ondelete(change);
-    })
-    .on('disconnected', () => {
-      // Broken connection
-      debug('Disconnected...');
-    })
-    .on('error', (e) => {
+  watcher = await watch('cns');
+
+  // Bind handlers
+  watcher.on('connected', () => {
+    // Re-connect
+    debug('Connected...');
+  })
+  .on('put', async (change) => {
+    // Key put
+    try {
+      const key = change.key.toString();
+      const value = change.value.toString();
+
+      await onput(key, value);
+    } catch(e) {
       // Failure
-      throw new Error(E_WATCH + ': ' + e.message);
-    });
+      error(e);
+    }
+  })
+  .on('delete', async (change) => {
+    // Key deleted
+    try {
+      const key = change.key.toString();
+      const value = cache[key];
+
+      await ondelete(key, value);
+    } catch(e) {
+      // Failure
+      error(e);
+    }
+  })
+  .on('disconnected', () => {
+    // Broken connection
+    debug('Disconnected...');
+  })
+  .on('error', (e) => {
+    // Failure
+    throw new Error(E_WATCH + ': ' + e.message);
+  });
 
   // Success
-  print('Network on ' + host + (username?(' as ' + username):''));
+  print('Network on ' + (username?(username + '@'):'') + host);
 }
 
-// Put event handler
-async function onput(change) {
-  try {
-    // Get change
-    const key = change.key.toString();
-    const value = change.value.toString();
-
-//    debug('PUT ' + key + ' = ' + value);
-
-    // Creating or modifying key?
-//    if (change.version === '1')
-//      await created(key, value);
-//    else
-    await modified(key, value);
-  } catch(e) {
-    // Failure
-    error(e);
-  }
-}
-
-// Delete event handler
-async function ondelete(change) {
-  try {
-    // Get change
-    const key = change.key.toString();
-    const value = change.value.toString();
-
-//console.log(change);
-//    debug('DEL ' + key, value);
-
-    // Deleting key
-    await deleted(key, value);
-  } catch(e) {
-    // Failure
-    error(e);
-  }
-}
-
-// Is valid mode
-function isValidMode() {
-  // What mode?
-  switch (mode) {
-    case 'nodes':
-    case 'contexts':
-      return true;
-  }
-  return false;
-}
-
-// cns/network/nodes/{node}/contexts/{context}/{role}/{profile}/connections/{connection}/properties
-
-/*
-// Key is created
-async function created(key, value) {
-  const parts = key.split('/');
-
-  const network = parts[2];
-  const role = parts[6];
-  const capability = parts[8];
-
-  switch (network) {
-    case 'orchestrator':
-      // Orchestrator created
-      mode = value;
-      rebuild();
-      break;
-    case 'nodes':
-      // Node created
-      switch (role) {
-        case 'provider':
-        case 'consumer':
-          // Capability created
-          switch (capability) {
-            case 'version':
-              // Version created
-              rebuild();
-              break;
-            case 'connections':
-              // Connections
-              switch (connection) {
-                case 'properties':
-                  // Connection properties
-                  await update(key, value);
-                  break;
-              }
-              break;
-            case 'properties':
-              // Capability properties
-              await propagate(key, value);
-              break;
-          }
-          break;
-      }
-      break;
-    case 'profiles':
-      // Profile created
-      rebuild();
-      break;
-  }
-}*/
+// cns/{network}/nodes/{node}/contexts/{context}/{role}/{profile}/connections/{connection}/properties
 
 // Key has changed
-async function modified(key, value) {
+async function onput(key, value) {
+//  debug('PUT ' + key + ' = ' + value);
+
+  // Split key
   const parts = key.split('/');
 
-  const network = parts[2];
+  const root = parts[0];
+  const network = parts[1];
+  const property = parts[2];
   const role = parts[6];
   const capability = parts[8];
   const connection = parts[10];
 
-  switch (network) {
+  // Outside scope?
+  if (root !== 'cns' || network === undefined) return;
+
+  // Update cache
+  cache[key] = value;
+
+  // What network property?
+  switch (property) {
     case 'orchestrator':
       // Orchestrator changed
-      mode = value;
-// remove all connections
+// remove all connections?
       rebuild();
       break;
     case 'nodes':
@@ -363,6 +294,7 @@ async function modified(key, value) {
           switch (capability) {
             case 'version':
             case 'scope':
+              // Version or scope
 // remove profile connections?
               rebuild();
               break;
@@ -391,23 +323,34 @@ async function modified(key, value) {
 }
 
 // Key is deleted
-async function deleted(key, value) {
+async function ondelete(key, value) {
+//  debug('DEL ' + key, value);
+
+  // Split key
   const parts = key.split('/');
 
-  const network = parts[2];
+  const root = parts[0];
+  const network = parts[1];
+  const property = parts[2];
   const role = parts[6];
   const profile = parts[7];
   const capability = parts[8];
   const connection = parts[9];
   const other = parts[10];
 
+  // Outside scope?
+  if (root !== 'cns' || network === undefined) return;
+
+  // Update cache
+  delete cache[key];
+
 // profile delete
 // capability delete
 
-  switch (network) {
+  // What network property?
+  switch (property) {
     case 'orchestrator':
       // Orchestrator deleted
-      mode = 'none';
 // remove all connections?
       break;
     case 'nodes':
@@ -417,8 +360,9 @@ async function deleted(key, value) {
           // Capability
           switch (capability) {
             case 'version':
-            case 'scope':
-    // remove connections?
+              // Capability deleted
+//            case 'scope':
+// remove connections (both ends)
 //              rebuild();
               break;
             case 'connections':
@@ -427,7 +371,7 @@ async function deleted(key, value) {
                 case 'provider':
                 case 'consumer':
                   // Role deleted
-                    // previous value is not available!
+// remove opposite connection
 //                  const key2 = value + '/' + role + '/' + profile + '/connections/' + connection;
 //                  console.log('WANTS TO PURGE', key2);
                   break;
@@ -435,25 +379,24 @@ async function deleted(key, value) {
               // Connection deleted
 //              rebuild();
               break;
-    // delete property? put it back
+// delete property? put it back
           }
           break;
       }
       break;
     case 'profiles':
       // Profile deleted
+// remove connections using profile
       break;
   }
 }
 
 // Update connection property
 async function update(key, value) {
-  // Mode check
-  if (!isValidMode()) return;
-
   // Split key
   const parts = key.split('/');
 
+  const network = parts[1];
   const node = parts[3];
   const context = parts[5];
   const role = parts[6];
@@ -461,88 +404,87 @@ async function update(key, value) {
   const connection = parts[9];
   const property = parts[11];
 
+  var ns = 'cns/' + network;
+
+  // Get orchestrator mode
+  const mode = cache[ns + '/orchestrator'];
+  if (!isValidMode(mode)) return;
+
+  ns += '/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile;
+
   // Get capability version
-  const version = await get('cns/network/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile + '/version');
+  const version = cache[ns + '/version'];
   if (version === null) return;
 
   // Get property provider
-  const provider = await get('cns/network/profiles/' + profile + '/versions/version' + version + '/properties/' + property + '/provider');
+  const provider = cache['cns/' + network + '/profiles/' + profile + '/versions/version' + version + '/properties/' + property + '/provider'];
   if (provider === null) return;
 
-  var anti;
-
-  switch (role) {
-    case 'provider':
-      if (provider === 'yes') anti = 'consumer';
-      break;
-    case 'consumer':
-      if (provider !== 'yes') anti = 'provider';
-      break;
-  }
-
-  if (anti === undefined) return;
-
-// mode === contexts check nodeA === nodeB
+  // Get opposite role
+  const opposite = getOppositeRole(role, provider);
+  if (opposite === null) return;
 
   // Find other end
-  const other = await get('cns/network/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile + '/connections/' + connection + '/' + anti);
+  const other = cache[ns + '/connections/' + connection + '/' + opposite];
   if (other === null) return;
 
-  debug('Updating ' + anti + ' ' + connection + ' ' + property);
+  debug('Updating...');
+  debug('  ' + opposite + ' ' + connection + ' ' + property);
 
   // Set property at other end
-  await put(other + '/' + anti + '/' + profile + '/connections/' + connection + '/properties/' + property, value);
+  await put(other + '/' + opposite + '/' + profile + '/connections/' + connection + '/properties/' + property, value);
 }
 
-//
+// Propagate capability property
 async function propagate(key, value) {
-  // Mode check
-  if (!isValidMode()) return;
-
   // Split key
   const parts = key.split('/');
 
-// cns/network/nodes/{node}/contexts/{context}/{role}/{rpofile}/properties/{property}
-
+  const network = parts[1];
   const node = parts[3];
   const context = parts[5];
   const role = parts[6];
   const profile = parts[7];
   const property = parts[9];
 
+  var ns = 'cns/' + network;
+
+  // Get orchestrator mode
+  const mode = cache[ns + '/orchestrator'];
+  if (!isValidMode(mode)) return;
+
+  ns += '/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile;
+
   // Get capability version
-  const version = await get('cns/network/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile + '/version');
+  const version = cache[ns + '/version'];
   if (version === null) return;
 
   // Get property provider
-  const provider = await get('cns/network/profiles/' + profile + '/versions/version' + version + '/properties/' + property + '/provider');
+  const provider = cache['cns/' + network + '/profiles/' + profile + '/versions/version' + version + '/properties/' + property + '/provider'];
   if (provider === null) return;
 
-  var anti;
+  // Get opposite role
+  const opposite = getOppositeRole(role, provider);
+  if (opposite === null) return;
 
-  switch (role) {
-    case 'provider':
-      if (provider === 'yes') anti = 'consumer';
-      break;
-    case 'consumer':
-      if (provider !== 'yes') anti = 'provider';
-      break;
-  }
+  debug('Propagating...');
 
-  if (anti === undefined) return;
-
-  // Read network cache
-  const network = await all('cns/network/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile + '/connections');
-  const connections = filter(network, 'cns/network/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile + '/connections/*/' + anti);
+  // Update connections
+  const connections = filter(cache, ns + '/connections/*/' + opposite);
 
   for (const key in connections) {
+    // Split key
     const parts = key.split('/');
     const connection = parts[9];
 
-    debug('Propagate ' + role + ' ' + connection + ' ' + property);
+    debug('  ' + role + ' ' + connection + ' ' + property);
+
+    parts.pop();
+    parts.push('properties');
+    parts.push(property);
 
     // Set connection property
-    await put('cns/network/nodes/' + node + '/contexts/' + context + '/' + role + '/' + profile + '/connections/' + connection + '/properties/' + property, value);
+    await put(parts.join('/'), value);
   }
 }
 
@@ -550,9 +492,6 @@ async function propagate(key, value) {
 function rebuild() {
   // Cancel previous
   cancel();
-
-  // Mode check
-  if (!isValidMode()) return;
 
   // Set timer
   timer = setTimeout(async () => {
@@ -580,129 +519,142 @@ function cancel() {
 
 // Build connections
 async function build() {
-  // Mode check
-  if (!isValidMode()) return;
-
   debug('Building...');
 
-  // Read network cache
-  const network = await all('cns/network');
-
   const add = [];
-  const nodes = filter(network, 'cns/network/nodes/*/name');
 
-  // Look at nodes
-  for (const key in nodes) {
+  // Look at networks
+  const networks = filter(cache, 'cns/*/name');
+
+  for (const key in networks) {
     const parts = key.split('/');
-    const node = parts[3];
+    const network = parts[1];
 
-    debug('  Node ' + node);
+    const ns1 = 'cns/' + network;
 
-    const contexts = filter(network, 'cns/network/nodes/' + node + '/contexts/*/name');
+    // Get orchestrator mode
+    const mode = cache[ns1 + '/orchestrator'];
+    if (!isValidMode(mode)) return;
 
-    // Look at contexts
-    for (const key in contexts) {
+    debug('Network ' + network);
+
+    // Look at nodes
+    const nodes = filter(cache, ns1 + '/nodes/*/name');
+
+    for (const key in nodes) {
       const parts = key.split('/');
-      const context = parts[5];
+      const node = parts[3];
 
-      debug('    Context ' + context);
+      debug('  Node ' + node);
 
-      const provider = filter(network, 'cns/network/nodes/' + node + '/contexts/' + context + '/provider/*/version');
-      const consumer = filter(network, 'cns/network/nodes/' + node + '/contexts/' + context + '/consumer/*/version');
+      // Look at contexts
+      const ns2 = ns1 + '/nodes/' + node;
+      const contexts = filter(cache, ns2 + '/contexts/*/name');
 
-      // Look at providers
-      for (const key in provider) {
+      for (const key in contexts) {
         const parts = key.split('/');
-        const profile = parts[7];
-        const version = provider[key];
+        const context = parts[5];
 
-        debug('      Provides ' + profile + ' v' + version);
+        debug('    Context ' + context);
 
-        // Add consumers for provider
-        consumers(network, node, context, profile, version, add);
-      }
+        // Look at providers
+        const ns3 = ns2 + '/contexts/' + context;
+        const provider = filter(cache, ns3 + '/provider/*/version');
 
-      // Look at consumers
-      for (const key in consumer) {
-        const parts = key.split('/');
-        const profile = parts[7];
-        const version = consumer[key];
+        for (const key in provider) {
+          const parts = key.split('/');
 
-        debug('      Consumes ' + profile + ' v' + version);
+          const profile = parts[7];
+          const version = provider[key];
+
+          debug('      Provides ' + profile + ' v' + version);
+
+          // Add consumers for provider
+          consumers(mode, network, node, context, profile, version, add);
+        }
       }
     }
   }
 
   // Generate new connections
-  await connections(network, add);
+  await connections(add);
 }
 
 // Add consumers for provider
-function consumers(network, node, context, profile, version, add) {
-  const provider = 'cns/network/nodes/' + node + '/contexts/' + context;
+function consumers(mode, network, node, context, profile, version, add) {
+  // Provider context
+  const provider = 'cns/' + network + '/nodes/' + node + '/contexts/' + context;
+  const scope = context;
 
   // What mode?
   switch (mode) {
-    case 'nodes': nodes(network, provider, profile, version, add); break;
-    case 'contexts': contexts(network, provider, node, profile, version, add); break;
+    case 'allsystems': allsystems(provider, profile, version, scope, add); break;
+    case 'bysystem': bysystem(network, provider, profile, version, scope, add); break;
+  }
+}
+
+// Add network consumers
+function allsystems(provider, profile, version, scope, add) {
+  // Look through networks
+  const networks = filter(cache, 'cns/*/name');
+
+  for (const key in networks) {
+    const parts = key.split('/');
+    const network = parts[1];
+
+    // Add node consumers
+    bysystem(network, provider, node, profile, version, scope, add);
   }
 }
 
 // Add node consumers
-function nodes(network, provider, profile, version, add) {
-  const nodes = filter(network, 'cns/network/nodes/*/name');
-
+function bysystem(network, provider, profile, version, scope, add) {
   // Look through nodes
+  const nodes = filter(cache, 'cns/' + network + '/nodes/*/name');
+
   for (const key in nodes) {
     const parts = key.split('/');
     const node = parts[3];
 
-    // Add context consumers
-    contexts(network, provider, node, profile, version, add);
-  }
-}
+    // Look through contexts
+    const contexts = filter(cache, 'cns/' + network + '/nodes/' + node + '/contexts/*/name');
 
-// Add context consumers
-function contexts(network, provider, node, profile, version, add) {
-  const contexts = filter(network, 'cns/network/nodes/' + node + '/contexts/*/name');
+    for (const key in contexts) {
+      const parts = key.split('/');
+      const context = parts[5];
 
-  // Look through contexts
-  for (const key in contexts) {
-    const parts = key.split('/');
-    const context = parts[5];
+      // Context must match
+      if (context === scope) {
+        // Look through capabilities
+        const consumer = 'cns/' + network + '/nodes/' + node + '/contexts/' + context;
+        const capabilities = filter(cache, consumer + '/consumer/' + profile + '/version');
 
-    // Add capability consumers
-    capabilities(network, provider, node, context, profile, version, add);
-  }
-}
-
-// Add capability consumers
-function capabilities(network, provider, node, context, profile, version, add) {
-  const consumer = 'cns/network/nodes/' + node + '/contexts/' + context;
-  const capabilities = filter(network, consumer + '/consumer/' + profile + '/version');
-
-  // Look through capabilities
-  for (const key in capabilities) {
-    // Same profile version?
-    if (capabilities[key] === version) {
-      // Add possible connection
-      add.push({
-        provider: provider,
-        consumer: consumer,
-        profile: profile,
-        version: version
-      });
+        for (const key in capabilities) {
+          // Same profile version?
+          if (capabilities[key] === version) {
+            // Add possible connection
+            add.push({
+              provider: provider,
+              consumer: consumer,
+              profile: profile,
+              version: version
+            });
+          }
+        }
+      }
     }
   }
 }
 
 // Add missing connections
-async function connections(network, add) {
+async function connections(add) {
+  debug('Connecting...');
+
   // Look through possible connections
   for (const c of add) {
     // Look for existing connection
-    const provider = filter(network, c.provider + '/provider/' + c.profile + '/connections/*/consumer');
-    const consumer = filter(network, c.consumer + '/consumer/' + c.profile + '/connections/*/provider');
+    const provider = filter(cache, c.provider + '/provider/' + c.profile + '/connections/*/consumer');
+    const consumer = filter(cache, c.consumer + '/consumer/' + c.profile + '/connections/*/provider');
 
     var id = null;
 
@@ -729,18 +681,15 @@ async function connections(network, add) {
 
     // Connection already exists?
     if (!addp && !addc) {
-
-// check properties exist
-
-      debug('Connection exists ' + id);
+      debug('  Existing ' + id);
       continue;
     }
 
     // Merge connection defaults
     const properties = {};
 
-    const propsp = filter(network, c.provider + '/provider/' + c.profile + '/properties/*');
-    const propsc = filter(network, c.consumer + '/consumer/' + c.profile + '/properties/*');
+    const propsp = filter(cache, c.provider + '/provider/' + c.profile + '/properties/*');
+    const propsc = filter(cache, c.consumer + '/consumer/' + c.profile + '/properties/*');
 
     for (const key in propsp) {
       const parts = key.split('/');
@@ -756,12 +705,10 @@ async function connections(network, add) {
       properties[name] = propsc[key];
     }
 
-// switch (idformat)
-
     // Needs new id?
     if (id === null) id = short.generate();
 
-    debug('Creating connection ' + id);
+    debug('  Creating ' + id);
 
     // Add provider connection?
     if (addp) {
@@ -781,6 +728,26 @@ async function connections(network, add) {
         await put(ns + 'properties/' + name, properties[name]);
     }
   }
+}
+
+// Is valid mode
+function isValidMode(mode) {
+  // What mode?
+  switch (mode) {
+    case 'allsystems':
+    case 'bysystem':
+      return true;
+  }
+  return false;
+}
+
+// Get opposite role
+function getOppositeRole(role, provider) {
+  switch (role) {
+    case 'provider': if (provider === 'yes') return 'consumer'; break;
+    case 'consumer': if (provider !== 'yes') return 'provider'; break;
+  }
+  return null;
 }
 
 // Watch prefix
