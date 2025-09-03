@@ -603,7 +603,7 @@ function allsystems(provider, profile, version, scope, add) {
     const network = parts[1];
 
     // Add node consumers
-    bysystem(network, provider, node, profile, version, scope, add);
+    bysystem(network, provider, profile, version, scope, add);
   }
 }
 
