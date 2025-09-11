@@ -14,6 +14,7 @@ npm run start
 - `CNS_PORT` - The ETCD Port (2379)
 - `CNS_USERNAME`
 - `CNS_PASSWORD`
+- `CNS_PROFILES` - The profile server (https://cp.padi.io/profiles)
 
 ## Kubernetes
 
@@ -25,4 +26,3 @@ kubectl create secret generic \
 
 kubectl apply -f kubernetes/deployment.yaml
 ```
-

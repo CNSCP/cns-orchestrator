@@ -12,6 +12,8 @@ const env = require('dotenv').config();
 const etcd = require('etcd3');
 const short = require('short-uuid');
 const colours = require('colors');
+const http = require('http');
+const https = require('https');
 
 const pack = require('./package.json');
 
@@ -21,10 +23,13 @@ const E_OPTION = 'Illegal option';
 const E_MISSING = 'Missing argument';
 const E_CONFIG = 'Not configured';
 const E_CONNECT = 'Not connected';
+const E_FOUND = 'Not found';
 const E_WATCH = 'Failed to watch';
 const E_ALL = 'Failed to get all';
 const E_GET = 'Failed to get';
 const E_PUT = 'Failed to put';
+const E_DEL = 'Failed to del';
+const E_PURGE = 'Failed to purge';
 
 // Defaults
 
@@ -32,7 +37,8 @@ const defaults = {
   host: '127.0.0.1',
   port: '2379',
   username: '',
-  password: ''
+  password: '',
+  profiles: 'https://cp.padi.io/profiles'
 };
 
 // Configuration
@@ -41,7 +47,8 @@ const config = {
   host: process.env.CNS_HOST || defaults.host,
   port: process.env.CNS_PORT || defaults.port,
   username: process.env.CNS_USERNAME || defaults.username,
-  password: process.env.CNS_PASSWORD || defaults.password
+  password: process.env.CNS_PASSWORD || defaults.password,
+  profiles: process.env.CNS_PROFILES || defaults.profiles
 };
 
 // Options
@@ -54,9 +61,10 @@ const options = {
 // Local data
 
 var client;
-
-var cache;
 var watcher;
+
+var profiles;
+var cache;
 
 var timer;
 
@@ -94,6 +102,7 @@ function usage() {
   print('  -P, --port                    Set network port');
   print('  -u, --username                Set network username');
   print('  -p, --password                Set network password');
+  print('  -R, --profiles                Set profile server');
   print('  -m, --monochrome              Disable console colours');
   print('  -s, --silent                  Disable console output');
   print('  -d, --debug                   Enable debug output\n');
@@ -144,6 +153,11 @@ function parse(args) {
       case '--password':
         // Network password
         config.password = next(arg, args);
+        break;
+      case '-R':
+      case '--profiles':
+        // Profile server
+        config.profiles = next(arg, args);
         break;
       case '-m':
       case '--monochrome':
@@ -202,7 +216,7 @@ async function connect() {
     };
   }
 
-  // Create client
+   // Create client
   debug('Connecting...');
   client = new etcd.Etcd3(options);
 
@@ -255,8 +269,6 @@ async function connect() {
   // Success
   print('Network on ' + (username?(username + '@'):'') + host);
 }
-
-// cns/{network}/nodes/{node}/contexts/{context}/{role}/{profile}/connections/{connection}/properties
 
 // Key has changed
 async function onput(key, value) {
@@ -315,10 +327,6 @@ async function onput(key, value) {
           break;
       }
       break;
-    case 'profiles':
-      // Profile changed
-      rebuild();
-      break;
   }
 }
 
@@ -344,7 +352,6 @@ async function ondelete(key, value) {
   // Update cache
   delete cache[key];
 
-// profile delete
 // capability delete
 
   // What network property?
@@ -362,7 +369,6 @@ async function ondelete(key, value) {
             case 'version':
               // Capability deleted
 //            case 'scope':
-// remove connections (both ends)
 //              rebuild();
               break;
             case 'connections':
@@ -371,22 +377,15 @@ async function ondelete(key, value) {
                 case 'provider':
                 case 'consumer':
                   // Role deleted
-// remove opposite connection
-//                  const key2 = value + '/' + role + '/' + profile + '/connections/' + connection;
-//                  console.log('WANTS TO PURGE', key2);
+                  purge(value + '/' + other + '/' + profile + '/connections/' + connection);
                   break;
               }
               // Connection deleted
 //              rebuild();
               break;
-// delete property? put it back
           }
           break;
       }
-      break;
-    case 'profiles':
-      // Profile deleted
-// remove connections using profile
       break;
   }
 }
@@ -417,7 +416,7 @@ async function update(key, value) {
   if (version === null) return;
 
   // Get property provider
-  const provider = cache['cns/' + network + '/profiles/' + profile + '/versions/version' + version + '/properties/' + property + '/provider'];
+  const provider = await isProvider(profile, version, property);
   if (provider === null) return;
 
   // Get opposite role
@@ -460,7 +459,7 @@ async function propagate(key, value) {
   if (version === null) return;
 
   // Get property provider
-  const provider = cache['cns/' + network + '/profiles/' + profile + '/versions/version' + version + '/properties/' + property + '/provider'];
+  const provider = await isProvider(profile, version, property);
   if (provider === null) return;
 
   // Get opposite role
@@ -730,6 +729,83 @@ async function connections(add) {
   }
 }
 
+// Get profile
+async function getProfile(name) {
+  // Already have it?
+  var profile = profiles[name];
+
+  if (profile === undefined) {
+    // Send request
+    try {
+      const data = JSON.parse(await request('GET', config.profiles + '/' + name));
+
+      // Convert result
+      profile = {
+        name: data.title,
+        versions: {}
+      };
+
+      // Convert versions
+      for (var n = 0; n < data.versions.length; n++) {
+        const version = data.versions[n];
+        const properties = {};
+
+        // Convert properties
+        for (const property of version.properties) {
+          properties[property.name] = {
+            name: property.description || property.name,
+            provider: (property.server === null)?'yes':'no',
+            required: (property.required === null)?'yes':'no',
+            propagate: (property.propagate === null)?'yes':'no'
+          };
+        }
+        profile.versions['version' + (n + 1)] = properties;
+      }
+    } catch(e) {
+      // Failure
+      debug(e.message);
+      profile = null;
+    }
+
+    // Set profile cache
+    profiles[name] = profile;
+  }
+
+  // Not found?
+  if (profile === null)
+    throw new Error(E_FOUND + ': ' + name);
+
+  return profile;
+}
+
+// Get profile properties
+async function getProperties(name, version) {
+  // Get profile
+  const profile = await getProfile(name);
+
+  // Get properties
+  const versions = profile.versions || [];
+  const properties = versions['version' + version];
+
+  // Missing version?
+  if (properties === undefined)
+    throw new Error(E_FOUND + ': ' + name + ' v' + version);
+
+  return properties;
+}
+
+// Is provider property
+async function isProvider(profile, version, property) {
+  // Get profile properties
+  const properties = await getProperties(profile, version);
+
+  for (const name in properties) {
+    if (name === property)
+      return properties[name].provider;
+  }
+  return null;
+}
+
 // Is valid mode
 function isValidMode(mode) {
   // What mode?
@@ -808,6 +884,34 @@ async function put(key, value) {
     });
 }
 
+// Delete key
+async function del(key) {
+  // Must be connected
+  if (client === undefined)
+    throw new Error(E_CONNECT);
+
+  return await client.delete()
+    .key(key)
+    .catch((e) => {
+      // Failure
+      throw new Error(E_DEL + ': ' + e.message);
+    });
+}
+
+// Purge keys
+async function purge(prefix) {
+  // Must be connected
+  if (client === undefined)
+    throw new Error(E_CONNECT);
+
+  return await client.delete()
+    .prefix(prefix)
+    .catch((e) => {
+      // Failure
+      throw new Error(E_PURGE + ': ' + e.message);
+    });
+}
+
 // Filter keys
 function filter(keys, filter) {
   const result = {};
@@ -839,6 +943,65 @@ function match(text, filter) {
   return new RegExp('^' + filter.split('*').map(esc).join('.*') + '$', 'i').test(text);
 }
 
+// Get http request
+function request(method, url, data) {
+  // I promise to
+  return new Promise((resolve, reject) => {
+    // Decode url
+    const decode = new URL(url.startsWith('localhost')?('http://' + url):url);
+    const handler = (decode.protocol === 'https:')?https:http;
+
+    const options = {
+      protocol: decode.protocol,
+      hostname: decode.hostname,
+      port: decode.port,
+      path: decode.pathname + decode.search,
+      method: method
+    };
+
+    // Send request
+    debug('Requesting ' + url + '...');
+
+    const req = handler
+      .request(options, (res) => resolve(res))
+      .on('error', (e) => reject(e));
+
+    // Post request?
+    if (method === 'POST') {
+      // No data defined?
+      if (data === undefined)
+        throw new Error(E_MISSING);
+
+      req.write(data);
+    }
+    req.end();
+  })
+  .then((result) => {
+    // Get response
+    return response(result);
+  });
+}
+
+// Get http response
+function response(res) {
+  // Status ok?
+  if (res.statusCode !== 200)
+    throw new Error(res.statusCode + ' ' + res.statusMessage);
+
+  // I promise to
+  return new Promise((resolve, reject) => {
+    // Collate data
+    var data = '';
+
+    res.on('data', (chunk) => {
+      data += chunk;
+    });
+
+    res.on('end', () => resolve(data));
+    res.on('error', (e) => reject(e));
+  });
+}
+
 // Disconnect client
 async function disconnect() {
   // Close watcher?
@@ -856,6 +1019,10 @@ async function disconnect() {
     await client.close();
     client = undefined;
   }
+
+  // Clear cache
+  profiles = {};
+  cache = {};
 }
 
 // Terminate application
