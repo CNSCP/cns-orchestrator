@@ -22,35 +22,14 @@ steps:
       - '--push'
       - .
 
-  # Deploy to Kubernetes
-  - name: "gcr.io/cloud-builders/kubectl"
-    args: [
-      'set',
-      'image',
-      'deployment',
-      '${_APP_NAME}',
-      "${_APP_NAME}=${_GCR_IMAGE}:${_KUBE_DEPLOY_TAG}",
-      '-n',
-      "${_KUBE_NS}"
-    ]
-    env:
-      - 'CLOUDSDK_COMPUTE_ZONE=${_KUBE_LOCATION}'
-      - 'CLOUDSDK_CONTAINER_CLUSTER=${_KUBE_CLUSTER}'
-
-
 options:
   dynamic_substitutions: true
 
 substitutions:
   _APP_NAME: cns-orchestrator
-  _ARTIFACT_REGISTRY_REPO: cnscp
+  _ARTIFACT_REGISTRY_REPO: cnscp-preprod
   _ENV: staging
   _GCR_IMAGE: >-
     us-central1-docker.pkg.dev/${_GCR_PROJ}/${_ARTIFACT_REGISTRY_REPO}/${_APP_NAME}
-  _GCR_PROJ: padi-staging
-  _TAG: latest
-  _KUBE_CLUSTER: padi-staging
-  _KUBE_DEPLOY_TAG: '${SHORT_SHA}'
-  _KUBE_LOCATION: us-central1-c
-  _KUBE_NS: cns-dev
-
+  _GCR_PROJ: padi-80910
+  _TAG: staging
