@@ -38,7 +38,8 @@ const defaults = {
   port: '2379',
   username: '',
   password: '',
-  profiles: 'https://cp.padi.io/profiles'
+  profiles: 'https://cp.padi.io/profiles',
+  connect_timeout: '10000'
 };
 
 // Configuration
@@ -48,7 +49,8 @@ const config = {
   port: process.env.CNS_PORT || defaults.port,
   username: process.env.CNS_USERNAME || defaults.username,
   password: process.env.CNS_PASSWORD || defaults.password,
-  profiles: process.env.CNS_PROFILES || defaults.profiles
+  profiles: process.env.CNS_PROFILES || defaults.profiles,
+  connect_timeout: parseInt(process.env.CONNECT_TIMEOUT || defaults.connect_timeout)
 };
 
 // Options
@@ -220,13 +222,17 @@ async function connect() {
   debug('Connecting...');
   client = new etcd.Etcd3(options);
 
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Connection timed out')), config.connect_timeout)
+  );
+
   // Get cache
   debug('Caching...');
-  cache = await all('cns');
+  cache = await Promise.race([all('cns'), timeout]);
 
   // Create watcher
   debug('Watching...');
-  watcher = await watch('cns');
+  watcher = await Promise.race([watch('cns'), timeout]);
 
   // Bind handlers
   watcher.on('connected', () => {
