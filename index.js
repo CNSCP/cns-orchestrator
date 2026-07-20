@@ -464,12 +464,18 @@ async function propagate(key, value) {
   const version = cache[ns + '/version'];
   if (version === null) return;
 
-  // Get property provider
-  const provider = await isProvider(profile, version, property);
-  if (provider === null) return;
+  // Get profile property
+  const properties = await getProperties(profile, version);
+  const spec = properties[property];
+
+  // Not a profile property?
+  if (spec === undefined) return;
+
+  // Not propagated? Value stays on the capability
+  if (spec.propagate !== 'yes') return;
 
   // Get opposite role
-  const opposite = getOppositeRole(role, provider);
+  const opposite = getOppositeRole(role, spec.provider);
   if (opposite === null) return;
 
   debug('Propagating...');
@@ -693,6 +699,20 @@ async function connections(add) {
     // Merge connection defaults
     const properties = {};
 
+    // Get profile properties (null = unknown profile, keep permissive merge)
+    var spec = null;
+
+    try {
+      spec = await getProperties(c.profile, c.version);
+    } catch(e) {
+      // Failure
+      debug(e.message);
+    }
+
+    // Only propagated properties enter the connection
+    const propagated = (name) =>
+      (spec === null) || (spec[name] !== undefined && spec[name].propagate === 'yes');
+
     const propsp = filter(cache, c.provider + '/provider/' + c.profile + '/properties/*');
     const propsc = filter(cache, c.consumer + '/consumer/' + c.profile + '/properties/*');
 
@@ -700,14 +720,14 @@ async function connections(add) {
       const parts = key.split('/');
       const name = parts[9];
 
-      properties[name] = propsp[key];
+      if (propagated(name)) properties[name] = propsp[key];
     }
 
     for (const key in propsc) {
       const parts = key.split('/');
       const name = parts[9];
 
-      properties[name] = propsc[key];
+      if (propagated(name)) properties[name] = propsc[key];
     }
 
     // Needs new id?
