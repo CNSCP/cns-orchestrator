@@ -3,7 +3,7 @@
   "version": "0.1.6",
   "description": "CNS Orchestrator",
   "author": "Padi, Inc",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "main": "index.js",
   "bin": {
     "cns-orchestrator": "index.js"
