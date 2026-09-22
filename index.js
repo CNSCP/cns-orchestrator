@@ -86,6 +86,9 @@ async function main(argv) {
 
     // Initial rebuild
     rebuild();
+
+    // Periodic reconcile
+    startReconcile();
   } catch(e) {
     // Failure
     error(e);
@@ -206,8 +209,16 @@ async function connect() {
   const password = config.password;
 
   // Client options
+  //
+  // Multiple endpoints: host may be a comma-separated list of host[:port]
+  // entries (a raft cluster). etcd3 accepts a hosts array and fails over
+  // between them — without this, losing the single configured member takes
+  // the orchestrator down even though the cluster itself is healthy.
   const options = {
-    hosts: host + (port?(':' + port):'')
+    hosts: host.includes(',')
+      ? host.split(',').map((h) => h.trim()).filter(Boolean)
+        .map((h) => h.includes(':') ? h : (h + (port?(':' + port):'')))
+      : host + (port?(':' + port):'')
   };
 
   // Using auth?
@@ -499,24 +510,116 @@ async function propagate(key, value) {
   }
 }
 
-// Schedule a rebuid
+// Schedule a rebuild
+//
+// LEADING EDGE, not trailing. The previous implementation restarted a 1000ms
+// timer on every qualifying write, so the first build could not happen until
+// the realm had been quiet for a full second: bind latency had a hard ~1.03s
+// floor in every store topology (measured on 1-member, 3-member and WAN
+// clusters alike - see arete-perf/REPORT-etcd-cluster.md), and continuous
+// declaration churn anywhere in the realm could postpone every pending bind
+// indefinitely.
+//
+// Now: build immediately if we have not just built, and coalesce bursts by
+// deferring at most COALESCE ms. A build that is asked to run while one is in
+// flight sets `pending`, and the in-flight build reschedules itself on
+// completion - so concurrent builds can never interleave their writes, which
+// the old single-timer scheme also guaranteed.
+const COALESCE = parseInt(process.env.CNS_REBUILD_COALESCE || '100');
+
+// Periodic reconcile. The orchestrator is otherwise purely event-driven: any
+// change it fails to see is never acted on. Two such windows are known - the
+// gap between the initial getAll and the watch being established, and a
+// profile fetch that failed once and was cached as null forever. The sweep
+// re-reads the store, drops failed profile lookups so they can be retried,
+// and rebuilds, so a missed event self-heals within one interval instead of
+// leaving a declared pair unbound until someone restarts the process.
+const RECONCILE = parseInt(process.env.CNS_RECONCILE_INTERVAL || '30000');
+
+var building = false;
+var pending = false;
+var lastBuild = 0;
+var reconciler;
+
 function rebuild() {
-  // Cancel previous
-  cancel();
+  pending = true;
 
-  // Set timer
-  timer = setTimeout(async () => {
-    // Timer up
-    timer = undefined;
+  // A build is running; it will pick this up when it finishes
+  if (building) return;
 
-    try {
-      // Build connections
-      await build();
-    } catch(e) {
-      // Failure
-      error(e);
-    }
-  }, 1000);
+  const since = Date.now() - lastBuild;
+
+  // Idle long enough - go now
+  if (since >= COALESCE) {
+    runBuild();
+    return;
+  }
+
+  // Inside the coalescing window - one deferred build for the whole burst
+  if (timer === undefined) {
+    timer = setTimeout(() => {
+      timer = undefined;
+      runBuild();
+    }, COALESCE - since);
+  }
+}
+
+// Run a build, serialized
+async function runBuild() {
+  if (building) return;
+
+  building = true;
+  pending = false;
+
+  try {
+    // Build connections
+    await build();
+  } catch(e) {
+    // Failure
+    error(e);
+  }
+
+  building = false;
+  lastBuild = Date.now();
+
+  // Changes arrived while we were building
+  if (pending) rebuild();
+}
+
+// Re-read the store and rebuild, to recover from anything the watch missed
+async function reconcile() {
+  try {
+    debug('Reconciling...');
+
+    cache = await all('cns');
+
+    // Allow failed profile lookups to be retried
+    for (const name in profiles)
+      if (profiles[name] === null) delete profiles[name];
+
+    rebuild();
+  } catch(e) {
+    // Failure
+    error(e);
+  }
+}
+
+// Start the periodic reconcile
+function startReconcile() {
+  stopReconcile();
+
+  if (RECONCILE > 0) {
+    reconciler = setInterval(reconcile, RECONCILE);
+    if (reconciler.unref) reconciler.unref();
+  }
+}
+
+// Stop the periodic reconcile
+function stopReconcile() {
+  if (reconciler !== undefined) {
+    clearInterval(reconciler);
+    reconciler = undefined;
+  }
 }
 
 // Cancel rebuild
@@ -1030,6 +1133,9 @@ function response(res) {
 
 // Disconnect client
 async function disconnect() {
+  // Stop the periodic reconcile
+  stopReconcile();
+
   // Close watcher?
   if (watcher !== undefined) {
     debug('Unwatching...');
