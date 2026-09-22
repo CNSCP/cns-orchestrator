@@ -647,8 +647,13 @@ async function build() {
     const ns1 = 'cns/' + network;
 
     // Get orchestrator mode
+    //
+    // A system without a valid mode is skipped, not fatal: `continue`, never
+    // `return`. Returning here left build() before connections(add) ran, so a
+    // single system with a missing or unknown orchestrator key silently
+    // stopped every match in the realm from being written.
     const mode = cache[ns1 + '/orchestrator'];
-    if (!isValidMode(mode)) return;
+    if (!isValidMode(mode)) continue;
 
     debug('Network ' + network);
 
