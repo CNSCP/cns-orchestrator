@@ -81,8 +81,8 @@ async function main(argv) {
     // Show welcome
     print('Welcome to CNS-Orchestrator v' + pack.version + '.');
 
-    // Connect to key store
-    await connect();
+    // Connect to key store, retrying until it is usable
+    await connectWithRetry();
 
     // Initial rebuild
     rebuild();
@@ -279,12 +279,64 @@ async function connect() {
     debug('Disconnected...');
   })
   .on('error', (e) => {
-    // Failure
-    throw new Error(E_WATCH + ': ' + e.message);
+    // Failure. Not fatal: throwing from an event handler is an uncaught
+    // exception, which ended the whole process. Report it and rebuild the
+    // connection; the rebuild re-reads the store, so nothing is missed.
+    error(new Error(E_WATCH + ': ' + e.message));
+
+    // This watch is finished (the server has cancelled it), so don't ask it
+    // to cancel again: that promise never settles.
+    watcher = undefined;
+    reconnect();
   });
 
   // Success
   print('Network on ' + (username?(username + '@'):'') + host);
+}
+
+// Connect, retrying with back-off until the key store is usable.
+//
+// On a new realm etcd may not be up yet, or may not yet accept this user: the
+// chart creates the etcd users after the orchestrator has started. Exiting
+// here left the orchestrator to Kubernetes restarts, which back off for up to
+// five minutes, so matching on a new realm could start minutes late.
+const RETRY_MIN = 1000;
+const RETRY_MAX = parseInt(process.env.CNS_RECONNECT_MAX || '30000');
+
+async function connectWithRetry() {
+  var delay = RETRY_MIN;
+
+  for (;;) {
+    try {
+      await connect();
+      return;
+    } catch(e) {
+      // Failure
+      error(e);
+      print('Retrying in ' + (delay / 1000) + 's...');
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, RETRY_MAX);
+    }
+  }
+}
+
+// Rebuild the connection after a watch failure
+var reconnecting = false;
+
+async function reconnect() {
+  if (reconnecting) return;
+  reconnecting = true;
+
+  try {
+    // connect() disconnects first, which also stops the reconcile sweep
+    await connectWithRetry();
+
+    rebuild();
+    startReconcile();
+  } finally {
+    reconnecting = false;
+  }
 }
 
 // Key has changed
@@ -393,8 +445,10 @@ async function ondelete(key, value) {
               switch (other) {
                 case 'provider':
                 case 'consumer':
-                  // Role deleted
-                  purge(value + '/' + other + '/' + profile + '/connections/' + connection);
+                  // Role deleted. Awaited, so an etcd error is caught and logged
+                  // by the watch handler instead of becoming an unhandled
+                  // rejection, which ended the process.
+                  await purge(value + '/' + other + '/' + profile + '/connections/' + connection);
                   break;
               }
               // Connection deleted
@@ -1141,11 +1195,15 @@ async function disconnect() {
   // Stop the periodic reconcile
   stopReconcile();
 
-  // Close watcher?
+  // Close watcher? A watch that has already failed may refuse to cancel;
+  // that must not stop a reconnect.
   if (watcher !== undefined) {
     debug('Unwatching...');
 
-    await watcher.cancel();
+    await Promise.race([
+      watcher.cancel(),
+      new Promise((resolve) => setTimeout(resolve, 2000))
+    ]).catch((e) => debug(e.message));
     watcher = undefined;
   }
 
