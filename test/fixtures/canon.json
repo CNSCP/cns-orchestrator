@@ -1,0 +1,55 @@
+{
+  "recorded": "2026-09-23T15:43:25.247Z",
+  "origin": "https://cp.cnscp.io",
+  "accept": "application/cp+json; profile=2026",
+  "answers": {
+    "/padi.light": {
+      "status": 200,
+      "etag": "\"padi.light-1p-spec2026\"",
+      "body": "{\"name\":\"padi.light\",\"registered\":\"2022-06-02T14:12:29.553Z\",\"versions\":[{\"version\":1,\"status\":\"published\",\"published\":\"2022-06-02T14:12:29.553Z\",\"content_hash\":\"acd48bb7bd9e068ecbe8a2d9243eb69751fae537167328c41318716ddbee80b8\",\"owner\":\"Padi Inc.\",\"website\":\"https://padi.io\",\"href\":\"/padi.light:1\"}]}"
+    },
+    "/padi.light:1": {
+      "status": 200,
+      "etag": "\"acd48bb7bd9e068ecbe8a2d9243eb69751fae537167328c41318716ddbee80b8-spec2026\"",
+      "body": "{\"Header\":{\"Name\":\"padi.light\",\"Version\":\"1\",\"Pub Date\":\"2022-06-02T14:12:29.553Z\",\"Status\":\"Published\",\"Owner\":\"Padi Inc.\",\"Title\":\"Simple light control profile\",\"Provider\":\"A Controller\",\"Consumer\":\"A Light being controlled\",\"Description\":\"Controls a light\",\"Website\":\"https://padi.io\"},\"Properties\":{\"Provider\":[{\"Name\":\"sOut\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Description\":\"The output state of the controller 0=off, 1=on\"},{\"Name\":\"sLabel\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Description\":\"Controller label\"}],\"Consumer\":[{\"Name\":\"cState\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Description\":\"State of the light 0=off, 1=on\"},{\"Name\":\"cLabel\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Description\":\"Label of the Light\"}]}}"
+    },
+    "/padi.lighting": {
+      "status": 200,
+      "etag": "\"padi.lighting-1d.2p-spec2026\"",
+      "body": "{\"name\":\"padi.lighting\",\"registered\":\"2026-09-09T15:52:57.670Z\",\"versions\":[{\"version\":1,\"status\":\"deprecated\",\"published\":\"2026-09-10T16:05:35.614Z\",\"content_hash\":\"cd139caf7faf0368ab195d8e7115d5343f8d1dba34261b2cc422a29606c48bbe\",\"owner\":\"Padi, Inc.\",\"website\":\"https://padi.io/lighting\",\"href\":\"/padi.lighting:1\"},{\"version\":2,\"status\":\"published\",\"published\":\"2026-09-10T20:05:46.090Z\",\"content_hash\":\"6e29a750bf1670709e8a575e2234f54d6e5da0dcb203d484f43f667d2464e358\",\"owner\":\"Padi, Inc.\",\"website\":\"https://padi.io/profiles/lighting\",\"href\":\"/padi.lighting:2\"}]}"
+    },
+    "/padi.lighting:1": {
+      "status": 200,
+      "etag": "\"cd139caf7faf0368ab195d8e7115d5343f8d1dba34261b2cc422a29606c48bbe-spec2026\"",
+      "body": "{\"Header\":{\"Name\":\"padi.lighting\",\"Owner\":\"Padi, Inc.\",\"Title\":\"Lighting Control\",\"Provider\":\"Controller\",\"Consumer\":\"Luminaire\",\"Description\":\"Connects a lighting controller to a controllable luminaire. The Provider supplies the desired level and optionally color and fade time; the Consumer acts on them and reports the level achieved and, on request, its power draw. Succeeds the 2022-era cp:padi.light contract, which remains published under its own name: levels are continuous rather than binary, properties are purpose-named, and device identification is left to the Realm's Context rather than carried as label properties.\",\"Website\":\"https://padi.io/lighting\",\"Status\":\"Deprecated\"},\"Properties\":{\"Provider\":[{\"Name\":\"level\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Default\":\"0\",\"Description\":\"The desired light level as a fraction, 0 to 1; 0 is off, 1 is fully on.\",\"Sample\":\"0.75\"},{\"Name\":\"color\",\"Mandatory\":\"no\",\"Propagate\":\"yes\",\"Description\":\"The desired color, as a CSS hex color. A luminaire that cannot render color ignores it.\",\"Sample\":\"#FFD9A0\"},{\"Name\":\"fade\",\"Mandatory\":\"no\",\"Propagate\":\"yes\",\"Default\":\"0\",\"Description\":\"Seconds over which the luminaire should move to a newly delivered level; 0 means immediately.\",\"Sample\":\"1.5\"}],\"Consumer\":[{\"Name\":\"actual\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Description\":\"The light level actually achieved, as a fraction, 0 to 1. Carries no Default, deliberately: the level achieved has no value until the luminaire reports one.\",\"Sample\":\"0.75\"},{\"Name\":\"power\",\"Mandatory\":\"no\",\"Propagate\":\"no\",\"Description\":\"Present power draw in watts, supplied to the single Connection that asked.\",\"Sample\":\"8.5\"}]}}"
+    },
+    "/padi.lighting:2": {
+      "status": 200,
+      "etag": "\"6e29a750bf1670709e8a575e2234f54d6e5da0dcb203d484f43f667d2464e358-spec2026\"",
+      "body": "{\"Header\":{\"Name\":\"padi.lighting\",\"Version\":\"2\",\"Pub Date\":\"2026-09-10T20:05:46.090Z\",\"Status\":\"Published\",\"Owner\":\"Padi, Inc.\",\"Title\":\"Lighting Control\",\"Provider\":\"Controller\",\"Consumer\":\"Luminaire\",\"Description\":\"Connects a lighting controller to a controllable luminaire. The Provider supplies the desired level and optionally color and fade time; the Consumer acts on them and reports the level achieved and, on request, its power draw. Succeeds the 2022-era cp:padi.light contract, which remains published under its own name: levels are continuous rather than binary, properties are purpose-named, and device identification is left to the Realm's Context rather than carried as label properties.\",\"Website\":\"https://padi.io/profiles/lighting\"},\"Properties\":{\"Provider\":[{\"Name\":\"level\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Default\":\"0\",\"Description\":\"The desired light level as a fraction, 0 to 1; 0 is off, 1 is fully on.\",\"Sample\":\"0.75\"},{\"Name\":\"color\",\"Mandatory\":\"no\",\"Propagate\":\"yes\",\"Description\":\"The desired color, as a CSS hex color. A luminaire that cannot render color ignores it.\",\"Sample\":\"#FFD9A0\"},{\"Name\":\"fade\",\"Mandatory\":\"no\",\"Propagate\":\"yes\",\"Default\":\"0\",\"Description\":\"Seconds over which the luminaire should move to a newly delivered level; 0 means immediately.\",\"Sample\":\"1.5\"}],\"Consumer\":[{\"Name\":\"actual\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Description\":\"The light level actually achieved, as a fraction, 0 to 1. Carries no Default, deliberately: the level achieved has no value until the luminaire reports one.\",\"Sample\":\"0.75\"},{\"Name\":\"power\",\"Mandatory\":\"no\",\"Propagate\":\"no\",\"Description\":\"Present power draw in watts, supplied to the single Connection that asked.\",\"Sample\":\"8.5\"}]}}"
+    },
+    "/padi.lighting:3": {
+      "status": 404,
+      "body": "{\"error\":\"no version 3 of \\\"padi.lighting\\\"\",\"name\":\"padi.lighting\",\"version\":3}"
+    },
+    "/padi.test.phase1": {
+      "status": 200,
+      "etag": "\"padi.test.phase1-1p-spec2026\"",
+      "body": "{\"name\":\"padi.test.phase1\",\"registered\":\"2026-09-11T21:42:36.872Z\",\"versions\":[{\"version\":1,\"status\":\"published\",\"published\":\"2026-09-11T21:46:39.562Z\",\"content_hash\":\"ddd9ac2518554b03909b0de605c700c82dc256ddb5bd5cd3dfbe9012adade01a\",\"owner\":\"Padi, Inc.\",\"website\":\"https://github.com/CNSCP/registry/blob/main/REGISTRY-DESIGN.md\",\"href\":\"/padi.test.phase1:1\"}]}"
+    },
+    "/padi.test.phase1:1": {
+      "status": 200,
+      "etag": "\"ddd9ac2518554b03909b0de605c700c82dc256ddb5bd5cd3dfbe9012adade01a-spec2026\"",
+      "body": "{\"Header\":{\"Name\":\"padi.test.phase1\",\"Version\":\"1\",\"Pub Date\":\"2026-09-11T21:46:39.562Z\",\"Status\":\"Published\",\"Owner\":\"Padi, Inc.\",\"Title\":\"Phase 1 Exercise\",\"Provider\":\"Exerciser\",\"Consumer\":\"Observer\",\"Description\":\"A test Profile published to exercise registration, publication and Channels on the canonical Registry (cp.cnscp.io) at the opening of Phase 1, 11 September 2026. The Provider reports its state and carries an event feed; the Consumer may leave a note. Under padi.test by design: local exercise, never intended to govern a real Connection.\",\"Website\":\"https://github.com/CNSCP/registry/blob/main/REGISTRY-DESIGN.md\"},\"Properties\":{\"Provider\":[{\"Name\":\"state\",\"Mandatory\":\"yes\",\"Propagate\":\"yes\",\"Default\":\"ready\",\"Description\":\"The exerciser's state: ready, running, or done.\",\"Sample\":\"running\"}],\"Consumer\":[{\"Name\":\"note\",\"Mandatory\":\"no\",\"Propagate\":\"no\",\"Description\":\"A free-text note from the observer, meaningful to the one exerciser it is addressed to.\",\"Sample\":\"looks fine from here\"}]},\"Channels\":[{\"Name\":\"events\",\"Mode\":\"message\",\"Protocol\":\"mqtt\",\"Provider Role\":\"server\",\"Consumer Role\":\"client\",\"Description\":\"An ordered message channel carrying MQTT: the Provider plays the broker (server), the Consumer a client. Exists to show a Channel on a published Profile; what is published on it is the exerciser's business.\"}]}"
+    },
+    "/padi.appliance": {
+      "status": 200,
+      "etag": "\"padi.appliance--spec2026\"",
+      "body": "{\"name\":\"padi.appliance\",\"registered\":\"2026-08-31T19:38:05.424Z\",\"versions\":[]}"
+    },
+    "/nosuch.thing.here": {
+      "status": 404,
+      "body": "{\"registered\":false,\"name\":\"nosuch.thing.here\",\"note\":\"No relationship may be inferred between names (spec §7.7); this is not an index.\"}"
+    }
+  }
+}

@@ -12,8 +12,7 @@ const env = require('dotenv').config();
 const etcd = require('etcd3');
 const short = require('short-uuid');
 const colours = require('colors');
-const http = require('http');
-const https = require('https');
+const registry = require('./registry');
 
 const pack = require('./package.json');
 
@@ -38,7 +37,7 @@ const defaults = {
   port: '2379',
   username: '',
   password: '',
-  profiles: 'https://cp.padi.io/profiles',
+  registry: 'https://cp.cnscp.io',
   connect_timeout: '10000'
 };
 
@@ -49,7 +48,7 @@ const config = {
   port: process.env.CNS_PORT || defaults.port,
   username: process.env.CNS_USERNAME || defaults.username,
   password: process.env.CNS_PASSWORD || defaults.password,
-  profiles: process.env.CNS_PROFILES || defaults.profiles,
+  registry: process.env.CP_REGISTRY_URL || defaults.registry,
   connect_timeout: parseInt(process.env.CONNECT_TIMEOUT || defaults.connect_timeout)
 };
 
@@ -65,10 +64,12 @@ const options = {
 var client;
 var watcher;
 
-var profiles;
+var resolver;
 var cache;
 
 var timer;
+
+var profilesIgnored = false;
 
 // Local functions
 
@@ -78,8 +79,12 @@ async function main(argv) {
     // Parse options
     parse(argv);
 
+    // Connection Profiles come from the CP Registry (2026 contract)
+    startResolver();
+
     // Show welcome
     print('Welcome to CNS-Orchestrator v' + pack.version + '.');
+    print('Profiles from ' + resolver.origin);
 
     // Connect to key store
     await connect();
@@ -107,7 +112,7 @@ function usage() {
   print('  -P, --port                    Set network port');
   print('  -u, --username                Set network username');
   print('  -p, --password                Set network password');
-  print('  -R, --profiles                Set profile server');
+  print('  -R, --registry                Set CP Registry URL (CP_REGISTRY_URL)');
   print('  -m, --monochrome              Disable console colours');
   print('  -s, --silent                  Disable console output');
   print('  -d, --debug                   Enable debug output\n');
@@ -160,9 +165,14 @@ function parse(args) {
         config.password = next(arg, args);
         break;
       case '-R':
+      case '--registry':
+        // CP Registry
+        config.registry = next(arg, args);
+        break;
       case '--profiles':
-        // Profile server
-        config.profiles = next(arg, args);
+        // The old profile server: no longer used
+        next(arg, args);
+        profilesIgnored = true;
         break;
       case '-m':
       case '--monochrome':
@@ -593,9 +603,9 @@ async function reconcile() {
 
     cache = await all('cns');
 
-    // Allow failed profile lookups to be retried
-    for (const name in profiles)
-      if (profiles[name] === null) delete profiles[name];
+    // Revalidate held Profiles: Deprecations and new versions reach the
+    // orchestrator here, and anything that did not resolve is asked again
+    await resolver.revalidate();
 
     rebuild();
   } catch(e) {
@@ -807,19 +817,23 @@ async function connections(add) {
     // Merge connection defaults
     const properties = {};
 
-    // Get profile properties (null = unknown profile, keep permissive merge)
-    var spec = null;
+    // Get profile properties. A Profile that does not resolve to a published,
+    // non-Deprecated version forms no Connection (§7.4: a Governor that cannot
+    // resolve cannot match; §8.6: none forms at a Deprecated version). The
+    // declaration waits, and the Reconcile sweep asks the Registry again.
+    var spec;
 
     try {
-      spec = await getProperties(c.profile, c.version);
+      spec = await resolver.bindable(c.profile, c.version);
     } catch(e) {
-      // Failure
-      debug(e.message);
+      // Not bindable (yet)
+      waiting(e);
+      continue;
     }
 
     // Only propagated properties enter the connection
     const propagated = (name) =>
-      (spec === null) || (spec[name] !== undefined && spec[name].propagate === 'yes');
+      (spec[name] !== undefined && spec[name].propagate === 'yes');
 
     const propsp = filter(cache, c.provider + '/provider/' + c.profile + '/properties/*');
     const propsc = filter(cache, c.consumer + '/consumer/' + c.profile + '/properties/*');
@@ -863,69 +877,38 @@ async function connections(add) {
   }
 }
 
-// Get profile
-async function getProfile(name) {
-  // Already have it?
-  var profile = profiles[name];
+// Create the CP Registry resolver
+function startResolver() {
+  resolver = registry.createResolver({
+    origin: config.registry,
+    debug: debug
+  });
 
-  if (profile === undefined) {
-    // Send request
-    try {
-      const data = JSON.parse(await request('GET', config.profiles + '/' + name));
+  // The old profile server setting is no longer read
+  if (process.env.CNS_PROFILES !== undefined || profilesIgnored)
+    print('CNS_PROFILES / --profiles is no longer used: Profiles are resolved from CP_REGISTRY_URL');
 
-      // Convert result
-      profile = {
-        name: data.title,
-        versions: {}
-      };
-
-      // Convert versions
-      for (var n = 0; n < data.versions.length; n++) {
-        const version = data.versions[n];
-        const properties = {};
-
-        // Convert properties
-        for (const property of version.properties) {
-          properties[property.name] = {
-            name: property.description || property.name,
-            provider: (property.server === null)?'yes':'no',
-            required: (property.required === null)?'yes':'no',
-            propagate: (property.propagate === null)?'yes':'no'
-          };
-        }
-        profile.versions['version' + (n + 1)] = properties;
-      }
-    } catch(e) {
-      // Failure
-      debug(e.message);
-      profile = null;
-    }
-
-    // Set profile cache
-    profiles[name] = profile;
-  }
-
-  // Not found?
-  if (profile === null)
-    throw new Error(E_FOUND + ': ' + name);
-
-  return profile;
+  // Pointed at the old profile server by mistake?
+  if (/\/profiles$/.test(resolver.origin))
+    print('CP_REGISTRY_URL ends in /profiles: expected the CP Registry origin, such as https://cp.cnscp.io');
 }
 
-// Get profile properties
+// Report a declaration that cannot bind, once per reason
+const waitingSeen = new Set();
+
+function waiting(e) {
+  if (waitingSeen.has(e.message)) {
+    debug('  Waiting: ' + e.message);
+    return;
+  }
+
+  waitingSeen.add(e.message);
+  print('Not binding ' + e.message);
+}
+
+// Get profile properties (any existing version, Deprecated included)
 async function getProperties(name, version) {
-  // Get profile
-  const profile = await getProfile(name);
-
-  // Get properties
-  const versions = profile.versions || [];
-  const properties = versions['version' + version];
-
-  // Missing version?
-  if (properties === undefined)
-    throw new Error(E_FOUND + ': ' + name + ' v' + version);
-
-  return properties;
+  return resolver.properties(name, version);
 }
 
 // Is provider property
@@ -1077,65 +1060,6 @@ function match(text, filter) {
   return new RegExp('^' + filter.split('*').map(esc).join('.*') + '$', 'i').test(text);
 }
 
-// Get http request
-function request(method, url, data) {
-  // I promise to
-  return new Promise((resolve, reject) => {
-    // Decode url
-    const decode = new URL(url.startsWith('localhost')?('http://' + url):url);
-    const handler = (decode.protocol === 'https:')?https:http;
-
-    const options = {
-      protocol: decode.protocol,
-      hostname: decode.hostname,
-      port: decode.port,
-      path: decode.pathname + decode.search,
-      method: method
-    };
-
-    // Send request
-    debug('Requesting ' + url + '...');
-
-    const req = handler
-      .request(options, (res) => resolve(res))
-      .on('error', (e) => reject(e));
-
-    // Post request?
-    if (method === 'POST') {
-      // No data defined?
-      if (data === undefined)
-        throw new Error(E_MISSING);
-
-      req.write(data);
-    }
-    req.end();
-  })
-  .then((result) => {
-    // Get response
-    return response(result);
-  });
-}
-
-// Get http response
-function response(res) {
-  // Status ok?
-  if (res.statusCode !== 200)
-    throw new Error(res.statusCode + ' ' + res.statusMessage);
-
-  // I promise to
-  return new Promise((resolve, reject) => {
-    // Collate data
-    var data = '';
-
-    res.on('data', (chunk) => {
-      data += chunk;
-    });
-
-    res.on('end', () => resolve(data));
-    res.on('error', (e) => reject(e));
-  });
-}
-
 // Disconnect client
 async function disconnect() {
   // Stop the periodic reconcile
@@ -1158,7 +1082,6 @@ async function disconnect() {
   }
 
   // Clear cache
-  profiles = {};
   cache = {};
 }
 
