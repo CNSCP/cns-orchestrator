@@ -874,6 +874,29 @@ async function connections(add) {
       for (const name in properties)
         await put(ns + 'properties/' + name, properties[name]);
     }
+
+    // Catch up. A value written at either capability while this connection
+    // was being created reaches neither side: it is not in `properties`, and
+    // propagate() could not see the connection yet, because its keys reach
+    // the cache only when the watch returns them. So record the connection in
+    // the cache now, for later writes to find, then convey anything that
+    // changed meanwhile.
+    if (addp) cache[c.provider + '/provider/' + c.profile + '/connections/' + id + '/consumer'] = c.consumer;
+    if (addc) cache[c.consumer + '/consumer/' + c.profile + '/connections/' + id + '/provider'] = c.provider;
+
+    for (const capability of [c.provider + '/provider/' + c.profile, c.consumer + '/consumer/' + c.profile]) {
+      for (const key in filter(cache, capability + '/properties/*')) {
+        const name = key.split('/')[9];
+
+        // The value now: a write may have landed while an earlier one was conveyed
+        const value = cache[key];
+
+        if (propagated(name) && value !== undefined && value !== properties[name]) {
+          debug('  Catching up ' + id + ' ' + name);
+          await propagate(key, value);
+        }
+      }
+    }
   }
 }
 
