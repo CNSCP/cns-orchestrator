@@ -1200,5 +1200,20 @@ process.on('SIGINT', () => {
   exit(1);
 });
 
+// Last resort. An unhandled rejection or an uncaught exception leaves the
+// process in an unknown state: log it clearly, then exit, so that Kubernetes
+// restarts a clean one. Node 22 already exits on both; handling them here
+// makes that this program's own choice, which a Node option such as
+// --unhandled-rejections=warn cannot quietly change, and says what happened.
+function fatal(what, e) {
+  const detail = (e && e.stack) ? e.stack : String(e);
+  console.error('FATAL: ' + what + ' in ' + pack.name + ' v' + pack.version +
+    ', exiting so it can be restarted\n' + detail);
+  process.exit(1);
+}
+
+process.on('unhandledRejection', (e) => fatal('unhandled rejection', e));
+process.on('uncaughtException', (e) => fatal('uncaught exception', e));
+
 // Start application
 main(process.argv.slice(2));
