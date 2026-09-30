@@ -137,4 +137,73 @@ function existing(idx, candidate, side) {
   return idx.conns.get(path.toLowerCase() + '|' + (side === 'provider' ? 'consumer' : 'provider')) || [];
 }
 
-module.exports = { isValidMode, buildIndex, candidates, existing };
+// A live index of a capability's properties and connection keys
+//
+// The orchestrator reads these three ways, each of which used to scan every
+// key of the realm with a wildcard filter: the properties a new connection
+// starts with, the properties to catch up after it is written, and the
+// connections to update when a property changes. The scan made each of them
+// cost as much as the realm is big.
+//
+// This index holds only keys, never values, so a reader asks the store for the
+// value at the time it reads, and sees writes that landed since. It is kept up
+// to date from the places the store changes (set, del, reset).
+//
+// A capability path is the first eight segments of a key, compared without
+// regard to case, as the wildcard filter did.
+class CapIndex {
+  constructor() { this.reset({}); }
+
+  // Start again from a whole store
+  reset(cache) {
+    this.props = new Map();
+    this.conns = new Map();
+    for (const key in cache) this.set(key);
+  }
+
+  // Note that a key exists
+  set(key) { this._edit(key, true); }
+
+  // Note that a key is gone
+  del(key) { this._edit(key, false); }
+
+  // Keys of a capability's properties: cns/<s>/nodes/<n>/contexts/<c>/<role>/<profile>/properties/*
+  properties(capability) {
+    const keys = this.props.get(capability.toLowerCase());
+    return keys ? Array.from(keys) : [];
+  }
+
+  // Keys of a capability's connections recording `opposite` ('consumer' or 'provider')
+  connections(capability, opposite) {
+    const keys = this.conns.get(capability.toLowerCase() + '|' + opposite.toLowerCase());
+    return keys ? Array.from(keys) : [];
+  }
+
+  _edit(key, present) {
+    const p = key.split('/');
+    if (p[0] !== 'cns' || p[2] !== 'nodes' || p[4] !== 'contexts') return;
+    if (p[6] !== 'provider' && p[6] !== 'consumer') return;
+
+    var map, id;
+
+    if (p.length === 10 && p[8] === 'properties') {
+      map = this.props; id = p.slice(0, 8).join('/').toLowerCase();
+    } else if (p.length === 11 && p[8] === 'connections' && (p[10] === 'consumer' || p[10] === 'provider')) {
+      map = this.conns; id = p.slice(0, 8).join('/').toLowerCase() + '|' + p[10];
+    } else {
+      return;
+    }
+
+    var set = map.get(id);
+
+    if (present) {
+      if (set === undefined) map.set(id, set = new Set());
+      set.add(key);
+    } else if (set !== undefined) {
+      set.delete(key);
+      if (set.size === 0) map.delete(id);
+    }
+  }
+}
+
+module.exports = { isValidMode, buildIndex, candidates, existing, CapIndex };
