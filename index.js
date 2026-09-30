@@ -13,6 +13,7 @@ const etcd = require('etcd3');
 const short = require('short-uuid');
 const colours = require('colors');
 const registry = require('./registry');
+const matching = require('./matching');
 
 const pack = require('./package.json');
 
@@ -699,164 +700,42 @@ function cancel() {
 async function build() {
   debug('Building...');
 
-  const add = [];
-
-  // Look at networks
-  const networks = filter(cache, 'cns/*/name');
-
-  for (const key in networks) {
-    const parts = key.split('/');
-    const network = parts[1];
-
-    const ns1 = 'cns/' + network;
-
-    // Get orchestrator mode
-    //
-    // A system without a valid mode is skipped, not fatal: `continue`, never
-    // `return`. Returning here left build() before connections(add) ran, so a
-    // single system with a missing or unknown orchestrator key silently
-    // stopped every match in the realm from being written.
-    const mode = cache[ns1 + '/orchestrator'];
-    if (!isValidMode(mode)) continue;
-
-    debug('Network ' + network);
-
-    // Look at nodes
-    const nodes = filter(cache, ns1 + '/nodes/*/name');
-
-    for (const key in nodes) {
-      const parts = key.split('/');
-      const node = parts[3];
-
-      debug('  Node ' + node);
-
-      // Look at contexts
-      const ns2 = ns1 + '/nodes/' + node;
-      const contexts = filter(cache, ns2 + '/contexts/*/name');
-
-      for (const key in contexts) {
-        const parts = key.split('/');
-        const context = parts[5];
-
-        debug('    Context ' + context);
-
-        // Look at providers
-        const ns3 = ns2 + '/contexts/' + context;
-        const provider = filter(cache, ns3 + '/provider/*/version');
-
-        for (const key in provider) {
-          const parts = key.split('/');
-
-          const profile = parts[7];
-          const version = provider[key];
-
-          debug('      Provides ' + profile + ' v' + version);
-
-          // Add consumers for provider
-          consumers(mode, network, node, context, profile, version, add);
-        }
-      }
-    }
-  }
+  // Index the store once; the lookups below never scan it (see matching.js)
+  const idx = matching.buildIndex(cache);
+  const add = matching.candidates(cache, idx);
 
   // Generate new connections
-  await connections(add);
-}
-
-// Add consumers for provider
-function consumers(mode, network, node, context, profile, version, add) {
-  // Provider context
-  const provider = 'cns/' + network + '/nodes/' + node + '/contexts/' + context;
-  const scope = context;
-
-  // What mode?
-  switch (mode) {
-    case 'allsystems': allsystems(provider, profile, version, scope, add); break;
-    case 'bysystem': bysystem(network, provider, profile, version, scope, add); break;
-  }
-}
-
-// Add network consumers
-function allsystems(provider, profile, version, scope, add) {
-  // Look through networks
-  const networks = filter(cache, 'cns/*/name');
-
-  for (const key in networks) {
-    const parts = key.split('/');
-    const network = parts[1];
-
-    // Add node consumers
-    bysystem(network, provider, profile, version, scope, add);
-  }
-}
-
-// Add node consumers
-function bysystem(network, provider, profile, version, scope, add) {
-  // Look through nodes
-  const nodes = filter(cache, 'cns/' + network + '/nodes/*/name');
-
-  for (const key in nodes) {
-    const parts = key.split('/');
-    const node = parts[3];
-
-    // Look through contexts
-    const contexts = filter(cache, 'cns/' + network + '/nodes/' + node + '/contexts/*/name');
-
-    for (const key in contexts) {
-      const parts = key.split('/');
-      const context = parts[5];
-
-      // Context must match
-      if (context === scope) {
-        // Look through capabilities
-        const consumer = 'cns/' + network + '/nodes/' + node + '/contexts/' + context;
-        const capabilities = filter(cache, consumer + '/consumer/' + profile + '/version');
-
-        for (const key in capabilities) {
-          // Same profile version?
-          if (capabilities[key] === version) {
-            // Add possible connection
-            add.push({
-              provider: provider,
-              consumer: consumer,
-              profile: profile,
-              version: version
-            });
-          }
-        }
-      }
-    }
-  }
+  await connections(add, idx);
 }
 
 // Add missing connections
-async function connections(add) {
+async function connections(add, idx) {
   debug('Connecting...');
 
   // Look through possible connections
   for (const c of add) {
     // Look for existing connection
-    const provider = filter(cache, c.provider + '/provider/' + c.profile + '/connections/*/consumer');
-    const consumer = filter(cache, c.consumer + '/consumer/' + c.profile + '/connections/*/provider');
+    const provider = matching.existing(idx, c, 'provider');
+    const consumer = matching.existing(idx, c, 'consumer');
 
     var id = null;
 
     var addp = true;
     var addc = true;
 
-    for (const key in provider) {
-      if (provider[key] === c.consumer) {
+    for (const e of provider) {
+      if (e.value === c.consumer) {
         // Provider connection exists
-        id = key.split('/')[9];
+        id = e.id;
         addp = false;
         break;
       }
     }
 
-    for (const key in consumer) {
-      if (consumer[key] === c.provider) {
+    for (const e of consumer) {
+      if (e.value === c.provider) {
         // Consumer connection exists
-        id = key.split('/')[9];
+        id = e.id;
         addc = false;
         break;
       }
@@ -1001,15 +880,7 @@ async function isProvider(profile, version, property) {
 }
 
 // Is valid mode
-function isValidMode(mode) {
-  // What mode?
-  switch (mode) {
-    case 'allsystems':
-    case 'bysystem':
-      return true;
-  }
-  return false;
-}
+const isValidMode = matching.isValidMode;
 
 // Get opposite role
 function getOppositeRole(role, provider) {
