@@ -387,3 +387,95 @@ test('a realm of 3,000 keys is indexed in well under a second', () => {
   matching.candidates(r.cache, idx);
   assert.ok(Date.now() - t0 < 1000, 'took ' + (Date.now() - t0) + ' ms');
 });
+
+// ---- CapIndex: the live index of properties and connection keys ------------
+//
+// Compared with the wildcard filter the orchestrator used to run over the whole
+// store for each of these reads, through random sequences of puts and deletes.
+
+function oracleProps(cache, capability) { return Object.keys(filter(cache, capability + '/properties/*')).sort(); }
+function oracleConns(cache, capability, opposite) { return Object.keys(filter(cache, capability + '/connections/*/' + opposite)).sort(); }
+
+test('CapIndex: properties and connections of a capability', () => {
+  const cache = {};
+  const cap = 'cns/a/nodes/n/contexts/x/provider/padi.light';
+  cache[cap + '/properties/sOut'] = '1';
+  cache[cap + '/properties/other'] = '2';
+  cache[cap + '/connections/id1/consumer'] = 'cns/b/nodes/n/contexts/x';
+  cache[cap + '/connections/id1/properties/cState'] = '3';
+  cache[cap + '/version'] = '1';
+  cache['cns/a/nodes/n/contexts/x/consumer/padi.light/properties/cState'] = '4';
+
+  const idx = new matching.CapIndex();
+  idx.reset(cache);
+
+  assert.deepStrictEqual(idx.properties(cap).sort(), oracleProps(cache, cap));
+  assert.strictEqual(idx.properties(cap).length, 2);
+  assert.deepStrictEqual(idx.connections(cap, 'consumer'), [cap + '/connections/id1/consumer']);
+  assert.deepStrictEqual(idx.connections(cap, 'provider'), []);
+  assert.deepStrictEqual(idx.properties('cns/zz/nodes/n/contexts/x/provider/padi.light'), []);
+});
+
+test('CapIndex: set and del follow the store; a value read through the store is the current one', () => {
+  const cache = {};
+  const cap = 'cns/a/nodes/n/contexts/x/provider/padi.light';
+  const idx = new matching.CapIndex();
+
+  cache[cap + '/properties/sOut'] = '1'; idx.set(cap + '/properties/sOut');
+  assert.deepStrictEqual(idx.properties(cap), [cap + '/properties/sOut']);
+
+  cache[cap + '/properties/sOut'] = '2'; idx.set(cap + '/properties/sOut'); // same key again
+  assert.strictEqual(idx.properties(cap).length, 1);
+  assert.strictEqual(cache[idx.properties(cap)[0]], '2');
+
+  delete cache[cap + '/properties/sOut']; idx.del(cap + '/properties/sOut');
+  assert.deepStrictEqual(idx.properties(cap), []);
+  idx.del(cap + '/properties/never'); // deleting an unknown key is harmless
+});
+
+test('CapIndex: capability paths compare without regard to case, as the filter did', () => {
+  const cache = { 'cns/a/nodes/n/contexts/x/provider/Padi.Light/properties/sOut': '1' };
+  const idx = new matching.CapIndex();
+  idx.reset(cache);
+  const cap = 'cns/a/nodes/n/contexts/x/provider/padi.light';
+  assert.deepStrictEqual(idx.properties(cap).sort(), oracleProps(cache, cap));
+  assert.strictEqual(idx.properties(cap).length, 1);
+});
+
+test('CapIndex: 100 random stores and mutation sequences give what the filter gave', () => {
+  for (let seed = 1; seed <= 100; seed++) {
+    const rand = rng(seed * 104729);
+    const pick = (a) => a[Math.floor(rand() * a.length)];
+    const caps = [];
+    for (const s of ['a', 'b']) for (const n of ['n1', 'n2']) for (const c of ['x', 'y']) for (const r of ['provider', 'consumer']) for (const p of ['padi.light', 'padi.lighting'])
+      caps.push('cns/' + s + '/nodes/' + n + '/contexts/' + c + '/' + r + '/' + p);
+    const names = ['sOut', 'cState', 'level', 'id1', 'id2'];
+    const randomKey = () => {
+      const cap = pick(caps);
+      switch (Math.floor(rand() * 5)) {
+        case 0: return cap + '/properties/' + pick(names);
+        case 1: return cap + '/connections/' + pick(['id1', 'id2']) + '/' + pick(['consumer', 'provider']);
+        case 2: return cap + '/connections/' + pick(['id1', 'id2']) + '/properties/' + pick(names);
+        case 3: return cap + '/version';
+        default: return cap.replace('/contexts/', '/things/') + '/properties/' + pick(names);
+      }
+    };
+
+    const cache = {};
+    const idx = new matching.CapIndex();
+    for (let i = 0; i < 300; i++) {
+      const key = randomKey();
+      if (rand() < 0.7) { cache[key] = String(i); idx.set(key); } else { delete cache[key]; idx.del(key); }
+      if (i % 37 === 0) { // a reconcile: start again from a whole store
+        const c2 = {}; for (const k in cache) c2[k] = cache[k];
+        idx.reset(c2);
+      }
+    }
+
+    for (const cap of caps) {
+      assert.deepStrictEqual(idx.properties(cap).sort(), oracleProps(cache, cap), 'properties seed ' + seed + ' ' + cap);
+      for (const opp of ['consumer', 'provider'])
+        assert.deepStrictEqual(idx.connections(cap, opp).sort(), oracleConns(cache, cap, opp), 'connections seed ' + seed + ' ' + cap);
+    }
+  }
+});

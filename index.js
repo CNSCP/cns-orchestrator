@@ -67,6 +67,7 @@ var watcher;
 
 var resolver;
 var cache;
+const capIndex = new matching.CapIndex();
 
 var timer;
 
@@ -251,6 +252,7 @@ async function connect() {
   // Get cache
   debug('Caching...');
   cache = await Promise.race([all('cns'), timeout]);
+  capIndex.reset(cache);
 
   // Create watcher
   debug('Watching...');
@@ -369,6 +371,7 @@ async function onput(key, value) {
 
   // Update cache
   cache[key] = value;
+  capIndex.set(key);
 
   // What network property?
   switch (property) {
@@ -431,6 +434,7 @@ async function ondelete(key, value) {
 
   // Update cache
   delete cache[key];
+  capIndex.del(key);
 
 // capability delete
 
@@ -557,9 +561,9 @@ async function propagate(key, value) {
   debug('Propagating...');
 
   // Update connections
-  const connections = filter(cache, ns + '/connections/*/' + opposite);
+  const connections = capIndex.connections(ns, opposite);
 
-  for (const key in connections) {
+  for (const key of connections) {
     // Split key
     const parts = key.split('/');
     const connection = parts[9];
@@ -657,6 +661,7 @@ async function reconcile() {
     debug('Reconciling...');
 
     cache = await all('cns');
+    capIndex.reset(cache);
 
     // Revalidate held Profiles: Deprecations and new versions reach the
     // orchestrator here, and anything that did not resolve is asked again
@@ -768,21 +773,16 @@ async function connections(add, idx) {
     const propagated = (name) =>
       (spec[name] !== undefined && spec[name].propagate === 'yes');
 
-    const propsp = filter(cache, c.provider + '/provider/' + c.profile + '/properties/*');
-    const propsc = filter(cache, c.consumer + '/consumer/' + c.profile + '/properties/*');
+    for (const key of capIndex.properties(c.provider + '/provider/' + c.profile)) {
+      const name = key.split('/')[9];
 
-    for (const key in propsp) {
-      const parts = key.split('/');
-      const name = parts[9];
-
-      if (propagated(name)) properties[name] = propsp[key];
+      if (propagated(name)) properties[name] = cache[key];
     }
 
-    for (const key in propsc) {
-      const parts = key.split('/');
-      const name = parts[9];
+    for (const key of capIndex.properties(c.consumer + '/consumer/' + c.profile)) {
+      const name = key.split('/')[9];
 
-      if (propagated(name)) properties[name] = propsc[key];
+      if (propagated(name)) properties[name] = cache[key];
     }
 
     // Needs new id?
@@ -814,11 +814,20 @@ async function connections(add, idx) {
     // the cache only when the watch returns them. So record the connection in
     // the cache now, for later writes to find, then convey anything that
     // changed meanwhile.
-    if (addp) cache[c.provider + '/provider/' + c.profile + '/connections/' + id + '/consumer'] = c.consumer;
-    if (addc) cache[c.consumer + '/consumer/' + c.profile + '/connections/' + id + '/provider'] = c.provider;
+    if (addp) {
+      const key = c.provider + '/provider/' + c.profile + '/connections/' + id + '/consumer';
+      cache[key] = c.consumer;
+      capIndex.set(key);
+    }
+
+    if (addc) {
+      const key = c.consumer + '/consumer/' + c.profile + '/connections/' + id + '/provider';
+      cache[key] = c.provider;
+      capIndex.set(key);
+    }
 
     for (const capability of [c.provider + '/provider/' + c.profile, c.consumer + '/consumer/' + c.profile]) {
-      for (const key in filter(cache, capability + '/properties/*')) {
+      for (const key of capIndex.properties(capability)) {
         const name = key.split('/')[9];
 
         // The value now: a write may have landed while an earlier one was conveyed
@@ -977,37 +986,6 @@ async function purge(prefix) {
     });
 }
 
-// Filter keys
-function filter(keys, filter) {
-  const result = {};
-  const filters = filter.split('/');
-
-  for (const key in keys) {
-    if (compare(key, filters))
-      result[key] = keys[key];
-  }
-  return result;
-}
-
-// Compare key with filters
-function compare(key, filters) {
-  const keys = key.split('/');
-
-  if (keys.length === filters.length) {
-    for (var n = 0; n < keys.length; n++)
-      if (!match(keys[n], filters[n])) return false;
-
-    return true;
-  }
-  return false;
-}
-
-// Wilcard match
-function match(text, filter) {
-  const esc = (s) => s.replace(/([.*+?^=!:${}()|\[\]\/\\])/g, '\\$1');
-  return new RegExp('^' + filter.split('*').map(esc).join('.*') + '$', 'i').test(text);
-}
-
 // Disconnect client
 async function disconnect() {
   // Stop the periodic reconcile
@@ -1035,6 +1013,7 @@ async function disconnect() {
 
   // Clear cache
   cache = {};
+  capIndex.reset(cache);
 }
 
 // Terminate application
